@@ -22,7 +22,9 @@ Algorytm nic nie wypisuje, przy błędzie odczytu/zapisu kończy się kodem 1.
 Weryfikator zwraca 0 gdy rozwiązanie jest poprawne, 2 gdy nie, 1 przy błędzie odczytu.
 
 `run.py` szuka instancji w `task1/instances/` (katalog nie jest w repo, trzeba wrzucić pliki samemu),
-wyniki zapisuje do `task1/results/`:
+wyniki zapisuje do `task1/results/`. Inne katalogi: `-i/--instances` i `-r/--results`
+albo na stałe przez zmienne `PTSZ_INSTANCES` i `PTSZ_RESULTS`
+(np. `export PTSZ_INSTANCES=~/ptsz/instancje` w `~/.zshrc`).
 
 ```sh
 python3 task1/run.py run                          # wszystkie instancje
@@ -32,6 +34,26 @@ python3 task1/run.py run --limit 1 --csv wyniki.csv
 ```
 
 Każdy wynik jest od razu sprawdzany weryfikatorem; przekroczony limit pokazuje się jako `CZAS =X`.
+
+Programy innych osób (plik `.cpp` jest kompilowany, `.py` i `.jar` idą przez interpreter,
+inny plik jest uruchamiany wprost; indeks brany z nazwy pliku):
+
+```sh
+python3 task1/run.py external 155347.cpp
+python3 task1/run.py external 155347.py --id 160128
+```
+
+Sprawdzenie gotowych plików `out_*.txt` z `task1/results/` (albo `--results <katalog>`):
+
+```sh
+python3 task1/run.py verify
+python3 task1/run.py verify --prog-id 155347
+```
+
+Do wklejania w arkusz: `--only wynik` albo `--only czas` (tylko `run`/`external`) wypisuje samą kolumnę,
+po jednej linii na instancję w kolejności autor → n. Błędy są wtedy wpisane jako `BŁĄD`,
+a opis idzie na stderr. `--comma` daje przecinek dziesiętny w czasach. Przy weryfikacji rozwiązań
+startowych (w pliku zadeklarowane 0) `verify --only wynik --computed` wypisuje policzoną wartość.
 
 ## Formaty
 
