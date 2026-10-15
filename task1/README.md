@@ -37,6 +37,12 @@ Z katalogu głównego repo (na Windows `python` zamiast `python3`).
    `python3 task1/run.py verify -i ~/ptsz/instancje -r ~/ptsz/wyniki --prog-id 160128 --only wynik`.
    `--comma` daje przecinek dziesiętny (arkusz po polsku).
 
+Sam algorytm na jednej instancji — bez podkomendy wszystkie argumenty idą prosto do programu:
+
+```sh
+python3 task1/run.py in_166123_50.txt out_166123_160128_50.txt 5
+```
+
 Bez CMake wystarczy skompilować sam algorytm i wskazać go przez `--program`
 (bez weryfikatora dopisz `--no-verify`):
 

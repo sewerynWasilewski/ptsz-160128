@@ -2,6 +2,7 @@
 """Budowanie, odpalanie algorytmu i weryfikacja wynikow dla zad. 1.
 
   python3 task1/run.py build
+  python3 task1/run.py in_160128_50.txt out.txt 5   # bez podkomendy: sam algorytm
   python3 task1/run.py run                          # wszystko z task1/instances
   python3 task1/run.py run --id 160128 --n 50 500
   python3 task1/run.py external 155347.cpp --only czas      # cudzy .cpp / .py / .jar / plik wykonywalny
@@ -280,6 +281,13 @@ def cmd_external(args):
     return cmd_run(args)
 
 
+def exec_program(argv):
+    """Bez podkomendy: odpala algorytm wprost z podanymi argumentami."""
+    if not check_tools([("program", DEFAULT_PROGRAM)]):
+        return 1
+    return subprocess.run([str(DEFAULT_PROGRAM)] + argv).returncode
+
+
 def cmd_verify(args):
     if not check_tools([("weryfikator", args.verifier)]):
         return 1
@@ -386,6 +394,11 @@ def main():
                    help="z --only wynik: wypisz policzona wartosc nawet gdy w pliku jest inna")
     v.add_argument("--csv", help="zapisz wyniki do pliku CSV")
     v.set_defaults(func=cmd_verify)
+
+    # pierwszy argument to nie podkomenda ani -h -> przekazujemy wszystko do algorytmu
+    argv = sys.argv[1:]
+    if argv and argv[0] not in sub.choices and argv[0] not in ("-h", "--help"):
+        sys.exit(exec_program(argv))
 
     args = parser.parse_args()
     sys.exit(args.func(args))
