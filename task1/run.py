@@ -8,7 +8,7 @@
   python3 task1/run.py verify                       # wszystkie out_*.txt z task1/results
   python3 task1/run.py verify --prog-id 155347 --only wynik
 
-Czas to czas rzeczywisty procesu. Limit domyslnie n/10 s, po przekroczeniu
+Czas to czas rzeczywisty procesu. Limit domyslnie n/20 s (--div X -> n/X, --limit -> staly), po przekroczeniu
 "CZAS =X", a po limit + --kill-after s proces jest ubijany.
 
 --only wynik|czas wypisuje sama kolumne (jedna linia na instancje, kolejnosc autor -> n)
@@ -189,7 +189,7 @@ def cmd_run(args):
     rows = []
     failures = 0
     for path, author, n in instances:
-        limit = args.limit if args.limit is not None else n / 10
+        limit = args.limit if args.limit is not None else n / args.div
         prog_part = f"_{args.prog_id}" if args.prog_id else ""
         out = results_dir / f"out_{author}{prog_part}_{n}.txt"
         if out.exists():
@@ -346,7 +346,8 @@ def main():
                        help="pojedyncze pliki instancji zamiast calego katalogu")
         p.add_argument("--id", nargs="+", help="tylko instancje tych autorow (indeksy)")
         p.add_argument("--n", nargs="+", type=int, help="tylko instancje o tych rozmiarach")
-        p.add_argument("--limit", type=float, help="limit czasu w s (domyslnie n/10)")
+        p.add_argument("--limit", type=float, help="staly limit czasu w s (nadpisuje --div)")
+        p.add_argument("--div", type=float, default=20.0, help="limit = n / DIV sekund (domyslnie 20)")
         p.add_argument("--kill-after", type=float, default=5.0,
                        help="przerwij program po przekroczeniu limitu o tyle sekund (domyslnie 5)")
         p.add_argument("--prog-id", help="indeks autora programu - nazwy out_<instancja>_<prog-id>_<n>.txt")

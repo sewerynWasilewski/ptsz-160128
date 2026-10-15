@@ -3,6 +3,48 @@
 Jedna maszyna, zadania z czasami gotowości r<sub>j</sub>, terminami d<sub>j</sub>, wagami w<sub>j</sub>
 i przezbrojeniami S<sub>ij</sub> zależnymi od kolejności. Minimalizujemy sumę wag zadań spóźnionych.
 
+## Jak uruchomić mój program (160128)
+
+Z katalogu głównego repo (na Windows `python` zamiast `python3`).
+
+1. Zbuduj:
+
+   ```sh
+   python3 task1/run.py build
+   ```
+
+2. Uruchom na swoich instancjach — `-i` katalog z instancjami, `--id` czyj zestaw,
+   `-r` gdzie zapisać wyniki:
+
+   ```sh
+   python3 task1/run.py run -i ~/ptsz/instancje --id 166123 -r ~/ptsz/wyniki --prog-id 160128
+   ```
+
+   Algorytm idzie po kolei przez `in_166123_50.txt` … `in_166123_500.txt` z limitem n/20 s,
+   wyniki trafiają do `~/ptsz/wyniki/out_166123_160128_<n>.txt` i od razu są sprawdzane
+   weryfikatorem. Całość trwa ok. 2,5 min.
+   Inny limit: `--div 10` daje n/10 s, `--limit 5` stałe 5 s na instancję.
+
+3. Do arkusza — dopisz `--only wynik` albo `--only czas`, dostaniesz samą kolumnę (10 linii, n = 50 … 500):
+
+   ```sh
+   python3 task1/run.py run -i ~/ptsz/instancje --id 166123 -r ~/ptsz/wyniki --prog-id 160128 --only wynik
+   python3 task1/run.py run -i ~/ptsz/instancje --id 166123 -r ~/ptsz/wyniki --prog-id 160128 --only czas --comma
+   ```
+
+   Każde wywołanie uruchamia algorytm od nowa. Żeby mieć obie kolumny z jednego przebiegu,
+   puść raz zwykłe `run`, a wyniki weź z tabeli albo przez
+   `python3 task1/run.py verify -i ~/ptsz/instancje -r ~/ptsz/wyniki --prog-id 160128 --only wynik`.
+   `--comma` daje przecinek dziesiętny (arkusz po polsku).
+
+Bez CMake wystarczy skompilować sam algorytm i wskazać go przez `--program`
+(bez weryfikatora dopisz `--no-verify`):
+
+```sh
+g++ -O2 -std=c++17 -o 160128 task1/scheduler.cpp
+python3 task1/run.py run -i ~/ptsz/instancje --id 166123 -r ~/ptsz/wyniki --prog-id 160128 --program ./160128 --no-verify
+```
+
 ## Pliki
 
 - `scheduler.cpp` — algorytm (`build/task1/160128`)
