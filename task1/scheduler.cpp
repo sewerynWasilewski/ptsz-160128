@@ -1,36 +1,8 @@
-// Algorytm dla problemu 1 | r_j, S_ij | sum w_j U_j
+// PTSZ zad. 1: 1 | r_j, S_ij | sum w_j U_j
+// uzycie: 160128 <instancja> <wynik> [limit_s]   (domyslnie limit = n/10)
 //
-// Uzycie:
-//   scheduler <plik_instancji> <plik_wynikowy> [limit_czasu_s]
-//
-//   limit_czasu_s - limit czasu w sekundach (domyslnie n/10)
-//
-// Idea (wersja laczona):
-//   1. Konstrukcja: heurystyka zachlanna - w kazdym kroku sposrod zadan, ktore jeszcze zdaza na
-//      termin, wybieramy zadanie o najlepszym priorytecie; zadania, ktore juz nie zdaza, trafiaja
-//      na koniec (metoda najblizszego sasiada wzgledem przezbrojen). Reguly priorytetu: 4 proste
-//      (najwczesniejsze zakonczenie, EDD, czas/waga, luz/waga) oraz ATCS (Apparent Tardiness
-//      Cost with Setups) na siatce parametrow 6x6.
-//   1b. Strojenie konstrukcji: parametry ATCS (k1, k2, kw) losujemy (globalnie albo wokol
-//      najlepszych) i zostawiamy najlepsza sekwencje - do TUNE_PCT % limitu lub TUNE_STALL prob
-//      bez poprawy.
-//   2. Poprawa: symulowane wyzarzanie (jeden cykl chlodzenia na pozostaly czas; temperatura
-//      maleje geometrycznie z uplywem czasu), najlepsze rozwiazanie zapamietywane. Ruchy: insert,
-//      swap, eject (spoznione na koniec), celowany insert (blisko ostatniej pozycji, gdzie zadanie
-//      zdazy) oraz rescue (ciezkie spoznione zadanie na pozycje, gdzie zdazy, ew. z wyrzuceniem
-//      lzejszego spoznionego na koniec). Z USE_SA=0: akceptacja ruchow nie pogarszajacych
-//      i perturbacja najlepszego przy stagnacji (jak w wersji bazowej).
-//
-// Funkcja kosztu: para (sum w_j U_j, sum w_j T_j zadan spoznionych) porownywana leksykograficznie.
-// Wazone spoznienie rozroznia sekwencje o tej samej karze i "przyciaga" spoznione zadania blisko
-// ich terminow, wiec kolejny ruch latwiej zamienia je w zadania na czas.
-//
-// Szybka ocena ruchu: harmonogram biezacej sekwencji jest zbuforowany (C, kara i spoznienie
-// narastajaco), ruch liczymy od pierwszej zmienionej pozycji do osobnego bufora i przerywamy,
-// gdy wiadomo, ze jest gorszy, albo gdy harmonogram "dogonil" stary (reszta bez zmian).
-//
-// Model harmonogramu taki jak w weryfikatorze:
-//   start_(1) = r_(1),  start_(k) = max(C_(k-1) + S_(k-1),(k), r_(k)),  C_(k) = start_(k) + p_(k)
+// najpierw zachlanna konstrukcja (kilka regul + ATCS ze strojeniem parametrow),
+// potem wyzarzanie do konca limitu. koszt = (sum wU, sum wT spoznionych) leksykograficznie.
 
 #include <algorithm>
 #include <chrono>
@@ -46,15 +18,15 @@
 
 using Clock = std::chrono::steady_clock;
 
-// Udzial czasu (%) na strojenie parametrow konstrukcji
+// ile % czasu na strojenie ATCS
 #ifndef TUNE_PCT
 #define TUNE_PCT 40
 #endif
-// strojenie konczy sie tez po tylu probach bez poprawy
+// albo stop po tylu probach bez poprawy
 #ifndef TUNE_STALL
 #define TUNE_STALL 300
 #endif
-// Mieszanka ruchow LS w procentach (reszta do 100 to rescue)
+// proporcje ruchow w % (reszta = rescue)
 #ifndef P_INSERT
 #define P_INSERT 45
 #endif
@@ -68,7 +40,7 @@ using Clock = std::chrono::steady_clock;
 #define P_TARGET 10
 #endif
 
-// Symulowane wyzarzanie zamiast akceptacji ruchow nie pogarszajacych + perturbacji
+// 0 = bez wyzarzania (akceptacja <= i perturbacje)
 #ifndef USE_SA
 #define USE_SA 1
 #endif
@@ -79,7 +51,7 @@ using Clock = std::chrono::steady_clock;
 #define SA_TEND 0.003
 #endif
 
-// Dane zadania - w petli oceny czytane razem, wiec trzymane obok siebie (16 bajtow)
+// r,p,d,w czytane razem w petli oceny
 struct Job {
     int32_t r, p, d, w;
 };
@@ -87,8 +59,8 @@ struct Job {
 struct Instance {
     int n = 0;
     std::vector<Job> job;
-    std::vector<int32_t> S;          // macierz przezbrojen wierszami: S[i*n + j]
-    std::vector<double> logW, logP;  // log w_j, log p_j - przyspieszenie reguly ATCS
+    std::vector<int32_t> S;          // S[i*n + j]
+    std::vector<double> logW, logP;  // do ATCS
 
     int32_t setup(int i, int j) const { return S[static_cast<size_t>(i) * n + j]; }
     const int32_t* row(int i) const { return &S[static_cast<size_t>(i) * n]; }
@@ -100,7 +72,7 @@ static bool readInstance(const std::string& path, Instance& inst) {
     const int n = inst.n;
     inst.job.resize(n);
     inst.S.resize(static_cast<size_t>(n) * n);
-    // wartosci musza miescic sie w int32 (sumy czasow i kar liczymy w 64 bitach)
+    // int32 wystarczy, sumy i tak w long long
     auto rd = [&](int32_t& x) {
         long long v;
         if (!(in >> v) || v < 0 || v > std::numeric_limits<int32_t>::max()) return false;
@@ -120,31 +92,29 @@ static bool readInstance(const std::string& path, Instance& inst) {
     return true;
 }
 
-// Koszt porownywany leksykograficznie: najpierw kara sum w_j U_j, potem wazone spoznienie
+// najpierw kara, przy remisie wazone spoznienie
 struct Cost {
     long long pen, tard;
     bool operator<(const Cost& o) const { return pen != o.pen ? pen < o.pen : tard < o.tard; }
     bool operator<=(const Cost& o) const { return !(o < *this); }
 };
-static const Cost WORSE{std::numeric_limits<long long>::max(), 0};  // "ruch na pewno gorszy"
+static const Cost WORSE{std::numeric_limits<long long>::max(), 0};
 
-// Ocena sekwencji z buforowaniem: C[k], pen[k] (kara narastajaco) i wt[k] (wazone spoznienie
-// narastajaco) dla pozycji 0..k. Ruch oceniamy do buforow roboczych nC/nPen/nWt,
-// a do glownych kopiujemy dopiero po akceptacji (commit) - odrzucenie nic nie kosztuje.
-// Niezmiennik: C/pen/wt zawsze opisuja biezaca sekwencje (z niego korzystaja ruchy celowane).
+// trzyma C, kare i spoznienie narastajaco dla biezacej sekwencji.
+// ruch liczony do nC/nPen/nWt, do glownych tablic trafia dopiero w commit()
 struct Evaluator {
     const Instance& I;
-    std::vector<long long> C, pen, wt;     // harmonogram biezacej sekwencji
-    std::vector<long long> nC, nPen, nWt;  // bufor roboczy ocenianego ruchu
-    int evalEnd = 0;                       // ostatnia pozycja policzona w buforze roboczym
-    bool cutTail = false;                  // czy ocena skonczyla sie wczesniej (dalej bez zmian)
+    std::vector<long long> C, pen, wt;
+    std::vector<long long> nC, nPen, nWt;
+    int evalEnd = 0;                       // do ktorej pozycji policzono ruch
+    bool cutTail = false;                  // ocena urwana, dalej bez zmian
 
     explicit Evaluator(const Instance& inst)
         : I(inst), C(inst.n), pen(inst.n), wt(inst.n), nC(inst.n), nPen(inst.n), nWt(inst.n) {}
 
     Cost current() const { return {pen[I.n - 1], wt[I.n - 1]}; }
 
-    // Pelne przeliczenie od pozycji 0 do glownych buforow; zwraca koszt
+    // pelne przeliczenie
     Cost eval(const std::vector<int>& seq) {
         const int n = I.n;
         long long t = 0, acc = 0, tard = 0;
@@ -164,9 +134,8 @@ struct Evaluator {
         return {acc, tard};
     }
 
-    // Ocena sekwencji seq zmienionej tylko na pozycjach lo..hi (stary harmonogram w C/pen/wt).
-    // Zwraca WORSE, gdy koszt na pewno przekroczy prog bound (wczesne odrzucenie);
-    // bound = WORSE wylacza odrzucanie (dokladny koszt, np. przy wyborze najlepszego kandydata).
+    // ocena po zmianie na pozycjach lo..hi. WORSE gdy na pewno ponad bound
+    // (bound = WORSE -> zawsze liczy dokladnie)
     Cost evalMove(const std::vector<int>& seq, int lo, int hi, const Cost& bound) {
         const int n = I.n;
         const long long curPen = pen[n - 1], curWt = wt[n - 1];
@@ -182,22 +151,20 @@ struct Evaluator {
             if (t > J.d) {
                 acc += J.w;
                 tard += J.w * (t - J.d);
-                // kara i spoznienie narastajaco nie maleja - koszt na pewno powyzej progu
+                // kara tylko rosnie, nie ma sensu liczyc dalej
                 if (bound < Cost{acc, tard}) return WORSE;
             }
             nC[k] = t;
             nPen[k] = acc;
             nWt[k] = tard;
-            // za hi sekwencja jest stara (takze zadanie na pozycji k, od ktorego zalezy
-            // przezbrojenie do k+1); gdy C_k jak dawniej, reszta harmonogramu bez zmian
+            // za hi juz stara sekwencja - jak C wyszlo takie samo, reszta sie nie zmieni
             if (k > hi) {
                 if (t == C[k]) {
                     evalEnd = k;
                     cutTail = true;
                     return {acc + curPen - pen[k], tard + curWt - wt[k]};
                 }
-                // C_k pozniej niz dawniej: dalsze zadania skoncza sie nie wczesniej niz poprzednio,
-                // wiec koszt koncowy >= koszt do k + stary koszt koncowki; gdy to ponad prog - odrzuc
+                // C pozniej niz bylo -> dalej nie bedzie lepiej niz stara koncowka
                 if (t > C[k] && bound < Cost{acc + curPen - pen[k], tard + curWt - wt[k]}) return WORSE;
             }
             Srow = I.row(j);
@@ -207,12 +174,12 @@ struct Evaluator {
         return {acc, tard};
     }
 
-    // Przyjecie ocenionego ruchu (ostatnie evalMove od pozycji lo): bufor roboczy -> glowny
+    // przepisanie wyniku ostatniego evalMove
     void commit(int lo) {
         const int n = I.n;
         const int e = evalEnd;
         std::copy(nC.begin() + lo, nC.begin() + e + 1, C.begin() + lo);
-        if (cutTail) {  // dalej harmonogram bez zmian, przesuwamy tylko sumy narastajace
+        if (cutTail) {  // harmonogram dalej ten sam, poprawiamy tylko sumy
             const long long dPen = nPen[e] - pen[e], dWt = nWt[e] - wt[e];
             for (int k = e + 1; k < n; ++k) {
                 pen[k] += dPen;
@@ -224,7 +191,7 @@ struct Evaluator {
     }
 };
 
-// Przeniesienie elementu z pozycji a na pozycje b (rownowazne erase + insert)
+// jak erase + insert, tylko bez realokacji
 static inline void moveElem(std::vector<int>& v, int a, int b) {
     if (a < b)
         std::rotate(v.begin() + a, v.begin() + a + 1, v.begin() + b + 1);
@@ -232,15 +199,13 @@ static inline void moveElem(std::vector<int>& v, int a, int b) {
         std::rotate(v.begin() + b, v.begin() + a, v.begin() + a + 1);
 }
 
-// Parametry reguly priorytetu (konstrukcji zachlannej)
 struct Rule {
-    int variant;    // 0..3 - reguly proste, 4 - ATCS
-    double k1, k2;  // parametry ATCS (skala luzu i skala przezbrojenia)
-    double kw;      // wykladnik wagi w ATCS (w^kw / p)
+    int variant;    // 0..3 proste, 4 = ATCS
+    double k1, k2;  // k1 - luz, k2 - przezbrojenia
+    double kw;      // waga^kw
 };
 
-// Heurystyka zachlanna. W kazdym kroku sposrod zadan, ktore jeszcze zdaza, wybieramy to
-// o najmniejszym kluczu (regula R).
+// zachlannie: z zadan, ktore jeszcze zdaza, bierzemy to z najmniejszym kluczem
 static std::vector<int> greedy(const Instance& I, const Rule& R, double avgP, double avgS) {
     const int n = I.n;
     std::vector<int> seq;
@@ -249,8 +214,7 @@ static std::vector<int> greedy(const Instance& I, const Rule& R, double avgP, do
     int last = -1;
     const double invSlack = 1.0 / (R.k1 * avgP), invLost = 1.0 / (R.k2 * avgS);
 
-    // alive - zadania nieuzyte, ktore moga jeszcze zdazyc (t rosnie, wiec raz spoznione
-    // nawet bez przezbrojenia zadanie zostaje spoznione - usuwamy je z listy na stale)
+    // zadania, ktore moga jeszcze zdazyc (jak raz odpadna, to na stale)
     std::vector<int> alive(n);
     for (int j = 0; j < n; ++j) alive[j] = j;
 
@@ -261,7 +225,7 @@ static std::vector<int> greedy(const Instance& I, const Rule& R, double avgP, do
         for (size_t q = 0; q < alive.size(); ++q) {
             const int j = alive[q];
             const Job& J = I.job[j];
-            if (std::max(t, static_cast<long long>(J.r)) + J.p > J.d) continue;  // nie zdazy nigdy
+            if (std::max(t, static_cast<long long>(J.r)) + J.p > J.d) continue;  // juz nie zdazy
             alive[keep++] = j;
             const long long setup = last >= 0 ? I.setup(last, j) : 0;
             const long long start = std::max(t + setup, static_cast<long long>(J.r));
@@ -269,26 +233,25 @@ static std::vector<int> greedy(const Instance& I, const Rule& R, double avgP, do
             if (C > J.d) continue;  // teraz nie zdazy
             double key;
             switch (R.variant) {
-                case 0: key = static_cast<double>(C); break;                    // najwczesniej skonczone
+                case 0: key = static_cast<double>(C); break;                    // najwczesniej koniec
                 case 1: key = static_cast<double>(J.d); break;                  // EDD
                 case 2: key = static_cast<double>(C - t) / J.w; break;          // zuzyty czas / waga
                 case 3: key = static_cast<double>(J.d - C) / J.w; break;        // luz / waga
                 default: {
-                    // ATCS: w^kw/p * exp(-luz/(k1*avgP)) * exp(-strata/(k2*avgS)), gdzie strata to
-                    // przezbrojenie + przestoj w oczekiwaniu na r_j. Minimalizujemy -log(indeksu).
+                    // ATCS w logarytmach, strata = setup + czekanie na r_j
                     const double slack = static_cast<double>(J.d - C);
                     const double lost = static_cast<double>(start - t);
                     key = -(R.kw * I.logW[j] - I.logP[j] - slack * invSlack - lost * invLost);
                 }
             }
-            // remis rozstrzyga mniejszy numer zadania (jak w regulach bazowych)
+            // przy remisie mniejszy numer
             if (key < bestKey || (key == bestKey && j < best)) {
                 bestKey = key;
                 best = j;
             }
         }
         alive.resize(keep);
-        if (best < 0) break;  // zadne pozostale zadanie nie zdazy - reszta i tak bedzie spozniona
+        if (best < 0) break;  // reszta i tak spozniona
         const long long setup = last >= 0 ? I.setup(last, best) : 0;
         t = std::max(t + setup, static_cast<long long>(I.job[best].r)) + I.job[best].p;
         used[best] = 1;
@@ -297,7 +260,7 @@ static std::vector<int> greedy(const Instance& I, const Rule& R, double avgP, do
         alive.erase(std::find(alive.begin(), alive.end(), best));
     }
 
-    // Spoznione zadania na koniec, metoda najblizszego sasiada wzgledem przezbrojen
+    // spoznione na koniec, po najmniejszym przezbrojeniu
     while (static_cast<int>(seq.size()) < n) {
         int best = -1;
         for (int j = 0; j < n; ++j)
@@ -309,16 +272,9 @@ static std::vector<int> greedy(const Instance& I, const Rule& R, double avgP, do
     return seq;
 }
 
-// Losowe przeszukiwanie lokalne od sekwencji best do deadline. Akceptacja: wyzarzanie (USE_SA=1)
-// albo ruchy nie pogarszajace + perturbacja najlepszego przy stagnacji (USE_SA=0).
-// Zwraca liczbe iteracji.
-//   Ruchy (proporcje P_* w procentach):
-//   - insert: przeniesienie losowego zadania na losowa pozycje,
-//   - swap: zamiana dwoch losowych zadan,
-//   - eject: zadanie spoznione na koniec sekwencji (jego kara jest stala, a zwalnia miejsce),
-//   - celowany insert: przeniesienie w okolice ostatniej pozycji, na ktorej zadanie jeszcze zdazy,
-//   - rescue: ciezkie zadanie spoznione na pozycje, gdzie zdazy; jesli to pogarsza wynik,
-//     wyrzucamy na koniec pierwsze zadanie spoznione o mniejszej wadze za nim (ruch zlozony).
+// wyzarzanie od best do deadline, zwraca liczbe iteracji
+// ruchy: insert, swap, eject (spoznione na koniec), celowany insert (tam gdzie zdazy),
+// rescue (ciezkie spoznione do przodu, ew. lzejsze spoznione na koniec)
 static long long localSearch(const Instance& I, Evaluator& ev, std::vector<int>& best, Cost& bestCost,
                              Clock::time_point deadline, std::mt19937& rng) {
     const int n = I.n;
@@ -326,14 +282,12 @@ static long long localSearch(const Instance& I, Evaluator& ev, std::vector<int>&
     std::uniform_int_distribution<int> pos(0, n - 1);
     const int MOVE_INSERT = P_INSERT, MOVE_SWAP = MOVE_INSERT + P_SWAP, MOVE_EJECT = MOVE_SWAP + P_EJECT,
               MOVE_TARGET = MOVE_EJECT + P_TARGET;  // reszta - rescue
-    const int RESCUE_SAMPLES = 3;     // z ilu losowych spoznionych wybieramy najciezsze
-    const int RESCUE_CANDIDATES = 2;  // ile pozycji (najpozniejszych, gdzie zdazy) oceniamy
+    const int RESCUE_SAMPLES = 3;     // z ilu spoznionych wybieramy
+    const int RESCUE_CANDIDATES = 2;  // ile pozycji sprawdzamy
 
 #if USE_SA
-    // Wyzarzanie: pogorszenie kary o delta przyjmujemy z prawdop. exp(-delta/T). Realizacja progiem:
-    // losujemy u i dopuszczamy kare do cur + floor(-T ln u) (dzieki temu dziala wczesne odrzucanie).
-    // T0: pogorszenie o srednia wage przyjmowane z prawdop. SA_ACC0; T maleje geometrycznie
-    // z uplywem czasu do T0 * SA_TEND na koncu limitu.
+    // prog zamiast klasycznego exp(-d/T): kara moze wzrosnac o floor(-T ln u),
+    // wtedy wczesne odrzucanie dalej dziala. T spada geometrycznie w czasie
     double avgW = 0;
     for (int j = 0; j < n; ++j) avgW += I.job[j].w;
     avgW /= n;
@@ -348,9 +302,8 @@ static long long localSearch(const Instance& I, Evaluator& ev, std::vector<int>&
     long long sinceImprove = 0;
     const long long stagnation = 50LL * n;
 
-    // Czy zadanie na pozycji k jest spoznione (wg harmonogramu biezacej sekwencji)
     auto isLate = [&](int k) { return ev.C[k] > I.job[cur[k]].d; };
-    // Losowa pozycja zadania spoznionego (kilka prob), -1 gdy nie znaleziono
+    // kilka prob, -1 jak nie trafi
     auto randomLate = [&]() {
         for (int t = 0; t < 8; ++t) {
             const int k = pos(rng);
@@ -358,13 +311,12 @@ static long long localSearch(const Instance& I, Evaluator& ev, std::vector<int>&
         }
         return -1;
     };
-    // Pierwsza pozycja k z C[k] > x (C jest niemalejace)
+    // pierwsze k z C[k] > x
     auto timeToPos = [&](long long x) {
         return static_cast<int>(std::upper_bound(ev.C.begin(), ev.C.end(), x) - ev.C.begin());
     };
-    // Ocena ruchu, ktory zmienil pozycje lo..hi, i akceptacja (true) albo odrzucenie (false).
-    // Po odrzuceniu wywolujacy musi przywrocic cur; bufory ewaluatora sa nadal aktualne.
-    Cost bound = curCost;  // prog akceptacji w biezacej iteracji
+    // true = przyjety; po false trzeba samemu cofnac zmiane w cur
+    Cost bound = curCost;
     auto tryAccept = [&](int lo, int hi) {
         const Cost c = ev.evalMove(cur, lo, hi, bound);
         if (!(c <= bound)) return false;
@@ -377,7 +329,6 @@ static long long localSearch(const Instance& I, Evaluator& ev, std::vector<int>&
         }
         return true;
     };
-    // Przeniesienie jednego zadania z a na b z akceptacja lub cofnieciem
     auto tryInsert = [&](int a, int b) {
         moveElem(cur, a, b);
         if (!tryAccept(std::min(a, b), std::max(a, b))) moveElem(cur, b, a);
@@ -400,7 +351,7 @@ static long long localSearch(const Instance& I, Evaluator& ev, std::vector<int>&
 #endif
         const int m = static_cast<int>(rng() % 100);
 
-        if (m < MOVE_INSERT) {  // insert losowy
+        if (m < MOVE_INSERT) {  // insert
             const int a = pos(rng), b = pos(rng);
             if (a != b) tryInsert(a, b);
         } else if (m < MOVE_SWAP) {  // swap
@@ -409,28 +360,27 @@ static long long localSearch(const Instance& I, Evaluator& ev, std::vector<int>&
                 std::swap(cur[a], cur[b]);
                 if (!tryAccept(std::min(a, b), std::max(a, b))) std::swap(cur[a], cur[b]);
             }
-        } else if (m < MOVE_EJECT) {  // eject: zadanie spoznione na koniec
+        } else if (m < MOVE_EJECT) {  // eject
             const int a = randomLate();
             if (a >= 0 && a < n - 1) tryInsert(a, n - 1);
         } else if (m < MOVE_TARGET) {  // celowany insert
             const int a = pos(rng);
             const Job& J = I.job[cur[a]];
-            // ostatnia pozycja, przed ktora jest jeszcze czas na wykonanie zadania, minus losowy odstep
+            // ostatnia pozycja gdzie jeszcze zdazy, troche wczesniej
             const int tgt = timeToPos(static_cast<long long>(J.d) - J.p) - static_cast<int>(rng() % 8);
             int b = std::max(0, std::min(n - 1, tgt));
-            if (b > a) b = std::max(a + 1, b - 1);  // po wyjeciu z a dalsze pozycje sie przesuwaja
+            if (b > a) b = std::max(a + 1, b - 1);  // po wyjeciu z a indeksy sie przesuwaja
             if (a != b) tryInsert(a, b);
         } else {  // rescue
             int a = -1;
-            for (int t = 0; t < RESCUE_SAMPLES; ++t) {  // najciezsze z kilku losowych spoznionych
+            for (int t = 0; t < RESCUE_SAMPLES; ++t) {
                 const int k = randomLate();
                 if (k >= 0 && (a < 0 || I.job[cur[k]].w > I.job[cur[a]].w)) a = k;
             }
             if (a > 0) {
                 const int j = cur[a];
                 const Job& J = I.job[j];
-                // Kandydaci: najpozniejsze pozycje k<a, na ktorych j lokalnie zdazy
-                // (dla k<a wartosci C sprzed ruchu sa aktualne). Wybieramy najlepsza z nich.
+                // najpozniejsze pozycje przed a, gdzie zdazy
                 int bestB = -1;
                 Cost bestC = WORSE;
                 int tried = 0;
@@ -450,9 +400,8 @@ static long long localSearch(const Instance& I, Evaluator& ev, std::vector<int>&
                 if (bestB >= 0) {
                     moveElem(cur, a, bestB);
                     if (!tryAccept(bestB, a)) {
-                        // naprawa: pierwsze spoznione (w nowym harmonogramie) zadanie o mniejszej
-                        // wadze za a -> na koniec; ocena ruchu zlozonego od bestB do konca
-                        ev.evalMove(cur, bestB, n - 1, WORSE);  // pelny nowy harmonogram w nC
+                        // nie wyszlo - wyrzuc na koniec lzejsze spoznione za nim
+                        ev.evalMove(cur, bestB, n - 1, WORSE);  // nowy harmonogram w nC
                         int e = -1;
                         for (int k = bestB + 1; k < n - 1; ++k)
                             if (ev.nC[k] > I.job[cur[k]].d && I.job[cur[k]].w < J.w) {
@@ -464,13 +413,13 @@ static long long localSearch(const Instance& I, Evaluator& ev, std::vector<int>&
                             if (!tryAccept(bestB, n - 1)) moveElem(cur, n - 1, e);
                             else e = -2;  // przyjete
                         }
-                        if (e != -2) moveElem(cur, bestB, a);  // cofnij przeniesienie j
+                        if (e != -2) moveElem(cur, bestB, a);  // cofnij
                     }
                 }
             }
         }
 
-        // Stagnacja: wroc do najlepszego i zaburz je kilkoma losowymi przeniesieniami
+        // tylko przy USE_SA=0
         if (!USE_SA && ++sinceImprove > stagnation) {
             cur = best;
             const int kicks = 2 + static_cast<int>(rng() % 4);
@@ -496,16 +445,16 @@ int main(int argc, char* argv[]) {
     }
     const int n = I.n;
     const double limit = argc > 3 ? std::atof(argv[3]) : n / 10.0;
-    // zapas na zapis wyniku i uruchomienie procesu
+    // zapas na start procesu i zapis
     const auto deadline = startTime + std::chrono::duration_cast<Clock::duration>(
                                           std::chrono::duration<double>(std::max(0.0, limit * 0.95 - 0.05)));
 
     Evaluator ev(I);
-    // ziarno z SCHED_SEED (benchmark), domyslnie 12345
+    // SCHED_SEED do testow
     const char* seedEnv = std::getenv("SCHED_SEED");
     std::mt19937 rng(seedEnv ? static_cast<unsigned>(std::strtoul(seedEnv, nullptr, 10)) : 12345u);
 
-    // srednie p i S - skale dla ATCS
+    // skale do ATCS
     double avgP = 0, avgS = 0;
     for (int j = 0; j < n; ++j) avgP += I.job[j].p;
     for (int i = 0; i < n; ++i)
@@ -514,7 +463,7 @@ int main(int argc, char* argv[]) {
     avgP = std::max(1.0, avgP / n);
     avgS = n > 1 ? std::max(1.0, avgS / (static_cast<double>(n) * (n - 1))) : 1.0;
 
-    // 1. Konstrukcja - najlepszy z wariantow deterministycznych (4 proste + siatka ATCS)
+    // konstrukcja: proste reguly + siatka ATCS
     std::vector<Rule> rules;
     for (int v = 0; v < 4; ++v) rules.push_back({v, 1, 1, 1});
     for (double k1 : {1.0, 2.0, 4.0, 8.0, 16.0, 64.0})
@@ -532,8 +481,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // 1b. Strojenie konstrukcji: losowe parametry ATCS (globalnie lub wokol najlepszych),
-    //     przez TUNE_PCT % czasu albo do TUNE_STALL prob bez poprawy
+    // losowe strojenie ATCS: obok najlepszych albo calkiem losowo
     const auto tuneEnd = startTime + (deadline - startTime) * TUNE_PCT / 100;
     std::uniform_real_distribution<double> u01(0.0, 1.0);
     std::normal_distribution<double> nrm(0.0, 1.0);
@@ -542,13 +490,12 @@ int main(int argc, char* argv[]) {
         ++sinceBetter;
         Rule R{4, 0, 0, 1};
         if (bestRule.variant == 4 && (rng() & 1)) {
-            // lokalnie: zaburzenie najlepszych dotad parametrow
             R = bestRule;
             R.k1 *= std::exp(0.4 * nrm(rng));
             R.k2 *= std::exp(0.4 * nrm(rng));
             R.kw = std::max(0.2, R.kw + 0.15 * nrm(rng));
         } else {
-            // globalnie: log-jednostajnie k1 w [0.5, 128], k2 w [0.02, 4], kw w [0.5, 2]
+            // k1 0.5-128, k2 0.02-4, kw 0.5-2
             R.k1 = std::exp(std::log(0.5) + u01(rng) * std::log(256.0));
             R.k2 = std::exp(std::log(0.02) + u01(rng) * std::log(200.0));
             R.kw = 0.5 + 1.5 * u01(rng);
@@ -563,10 +510,9 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // 2. Przeszukiwanie lokalne od najlepszego startu do konca limitu
+    // reszta czasu na wyzarzanie
     localSearch(I, ev, best, bestCost, deadline, rng);
 
-    // Zapis wyniku
     const Cost fin = ev.eval(best);
     std::ofstream out(argv[2]);
     if (!out) {

@@ -2,3 +2,6 @@ build/
 .DS_Store
 *.exe
 out_*.txt
+task1/instances/
+task1/results/
+__pycache__/
